@@ -27,38 +27,6 @@ octree = o3d.geometry.Octree(max_depth=2)
 octree.convert_from_point_cloud(pcd, size_expand=0.01)
 
 
-def rotation_matrix(x, y, z, degrees=True):
-
-    # Convert degrees to radians if needed
-    if degrees:
-        x, y, z = map(np.deg2rad, [x, y, z])
-
-    # Switch from x, y, z rotation vector to yaw, pitch, roll
-    # More info https://en.wikipedia.org/wiki/Rotation_matrix
-    a, b, g = z, y, x
-
-    # Construct rows of the rotation matrix
-    r1 = [np.cos(a)*np.cos(b),
-          np.cos(a)*np.sin(b)*np.sin(g)-np.sin(a)*np.cos(g),
-          np.cos(a)*np.sin(b)*np.cos(g)+np.sin(a)*np.sin(g)]
-
-    r2 = [np.sin(a)*np.cos(b),
-          np.sin(a)*np.sin(b)*np.sin(g)+np.cos(a)*np.cos(g),
-          np.sin(a)*np.sin(b)*np.cos(g)-np.cos(a)*np.sin(g)]
-
-    r3 = [-np.sin(b),
-          np.cos(b)*np.sin(g),
-          np.cos(b)*np.cos(g)]
-
-    # Assemble the rotation matrix
-    mat = np.array([r1, r2, r3])
-
-    # Set "almost zero" values to 0
-    mat[np.abs(mat) < np.finfo(np.float).eps] = 0
-
-
-    return mat
-
 def callback(node, node_info):
 
     print(node_info)
