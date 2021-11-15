@@ -2,6 +2,7 @@ import numpy as np
 import open3d as o3d
 import cmapy
 import random
+import geometry
 import itertools
 
 
@@ -121,9 +122,7 @@ def translate(points, vector):
     return points + vector
 
 
-def rotate(points, vector):
-
-    matrix = rotation_matrix(vector)
+def rotate(points, matrix):
 
     return np.transpose(np.matmul(matrix, np.transpose(points)))
 
@@ -163,31 +162,96 @@ def rotation_matrix(vector, degrees=True):
     return mat
 
 
-def visualize_octree(objects, cmap='gist_rainbow', discrete=False):
-    trees = []
-    for cloud in objects:
+def visualize(objects, option='tree', axes=True, cmap='gist_rainbow', discrete=False):
+    # Function Variables
+    geometries = []
+    envelope = None
+
+    # Generate Coordinate Axes
+    if axes:
+        geometries.append(o3d.geometry.TriangleMesh.create_coordinate_frame(size=75))
+
+    # Generate  Part Objects
+    for part in objects:
+        # Skip this object if it is not a "part" (ie, envelope)
+        if part.__class__.__name__ == 'Envelope':
+            envelope = part
+            continue
+
         # Create octree point cloud
         pcd = o3d.geometry.PointCloud()
-        pcd.points = o3d.utility.Vector3dVector(cloud.centers)
+        pcd.points = o3d.utility.Vector3dVector(part.centers)
         if discrete:
             rgb_colors = np.array([cmapy.color(cmap, random.randrange(0, 256, 10), rgb_order=True)
-                                   for i in range(len(cloud.centers))])
+                                   for i in range(len(part.centers))])
         else:
             rgb_colors = np.array([cmapy.color(cmap, random.randrange(0, 256), rgb_order=True)
-                                   for i in range(len(cloud.centers))])
+                                   for i in range(len(part.centers))])
         pcd.colors = o3d.utility.Vector3dVector(rgb_colors.astype(np.float)/255.0)
-        d = cloud.leaf_radius*2
+        d = part.leaf_radius*2
         size = np.sqrt((d**2)/2)
 
-        trees.append(o3d.geometry.VoxelGrid.create_from_point_cloud(pcd, size))
+        if option == 'tree':
+            geometries.append(o3d.geometry.VoxelGrid.create_from_point_cloud(pcd, size))
+        elif option == 'pcd':
+            geometries.append(pcd)
+
+    # Create the build envelope
+    if envelope:
+        x, y, z = envelope.xyzmax
+        # Points in right-hand rule order, bottom to top from origin
+        points = np.array([
+            [0.0, 0.0, 0.0], #0
+            [x, 0.0, 0.0], #1
+            [x, y, 0.0], #2
+            [0, y, 0.0], #3
+            [0.0, 0.0, z], #4
+            [x, 0.0, z], #5
+            [x, y, z], #6
+            [0, y, z] #7
+        ])
+        lines = np.array([
+            [0, 1],
+            [1, 2],
+            [2, 3],
+            [3, 0],
+            [4, 5],
+            [5, 6],
+            [6, 7],
+            [7, 4],
+            [0, 4],
+            [1, 5],
+            [2, 6],
+            [3, 7]
+        ])
+
+        # Create the line-set
+        line_set = o3d.geometry.LineSet()
+        line_set.points = o3d.utility.Vector3dVector(points)
+        line_set.lines = o3d.utility.Vector2iVector(lines)
+
+        # Append to geometries
+        geometries.append(line_set)
 
     # Start the visualization
-    o3d.visualization.draw_geometries(trees)
+    o3d.visualization.draw_geometries(geometries)
 
 
-def collision_check(vectors, d):
+def sphere_collision_check(vectors, d):
 
     # Calculate boolean collision array
     collisions = np.linalg.norm(vectors[:, 0, :]-vectors[:, 1, :], axis=1) <= d
+
+    return collisions
+
+
+def rect_collision_check(vectors, envelope, d):
+
+    # Envelope xyz min/max
+    xyzmin = envelope[0]
+    xyzmax = envelope[1]
+
+    # Calculate X, Y, & Z vectors in envelope bounds
+    collisions = np.invert(np.all(np.logical_and(vectors-d-xyzmin >= 0, vectors+d-xyzmax <= 0), axis=1))
 
     return collisions
