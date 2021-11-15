@@ -2,9 +2,10 @@ import numpy as np
 import open3d as o3d
 import shortuuid
 import utility as utility
-from time import time
 import itertools
 import warnings
+import cmapy
+import random
 from copy import copy, deepcopy
 
 
@@ -21,7 +22,6 @@ class SphereTree(object):
         min_points = round(surface_area * point_density)
         pcd = mesh.sample_points_poisson_disk(min_points)
         self.geometry_points = np.array(pcd.points)
-
 
         # Get root node dimension
         bbox_x = max(self.geometry_points[:, 0]) - min(self.geometry_points[:, 0])
@@ -100,7 +100,7 @@ class SphereTree(object):
             self.centers = utility.translate(self.centers, self.object_center)
 
 
-class Collisions(object):
+class Scene(object):
 
     def __init__(self, part_interval=2.5, envelope_interval=0):
 
@@ -201,6 +201,76 @@ class Collisions(object):
 
         return self.total_part_collisions() + self.total_envelope_collisions()
 
+    def visualize(self, option='tree', axes=True, cmap='gist_rainbow', discrete=False):
+        # Function Variables
+        geometries = []
+
+        # Generate Coordinate Axes
+        if axes:
+            geometries.append(o3d.geometry.TriangleMesh.create_coordinate_frame(size=75))
+
+        print(self.parts)
+
+        # Generate  Part Objects
+        for part in self.parts.values():
+            # Create octree point cloud
+            pcd = o3d.geometry.PointCloud()
+            pcd.points = o3d.utility.Vector3dVector(part.centers)
+            if discrete:
+                rgb_colors = np.array([cmapy.color(cmap, random.randrange(0, 256, 10), rgb_order=True)
+                                       for i in range(len(part.centers))])
+            else:
+                rgb_colors = np.array([cmapy.color(cmap, random.randrange(0, 256), rgb_order=True)
+                                       for i in range(len(part.centers))])
+            pcd.colors = o3d.utility.Vector3dVector(rgb_colors.astype(np.float) / 255.0)
+            d = part.leaf_radius * 2
+            size = np.sqrt((d ** 2) / 2)
+
+            if option == 'tree':
+                geometries.append(o3d.geometry.VoxelGrid.create_from_point_cloud(pcd, size))
+            elif option == 'pcd':
+                geometries.append(pcd)
+
+        # Create the build envelope
+        if self.build_envelope:
+            x, y, z = self.build_envelope.xyzmax
+            # Points in right-hand rule order, bottom to top from origin
+            points = np.array([
+                [0.0, 0.0, 0.0],  # 0
+                [x, 0.0, 0.0],  # 1
+                [x, y, 0.0],  # 2
+                [0, y, 0.0],  # 3
+                [0.0, 0.0, z],  # 4
+                [x, 0.0, z],  # 5
+                [x, y, z],  # 6
+                [0, y, z]  # 7
+            ])
+            lines = np.array([
+                [0, 1],
+                [1, 2],
+                [2, 3],
+                [3, 0],
+                [4, 5],
+                [5, 6],
+                [6, 7],
+                [7, 4],
+                [0, 4],
+                [1, 5],
+                [2, 6],
+                [3, 7]
+            ])
+
+            # Create the line-set
+            line_set = o3d.geometry.LineSet()
+            line_set.points = o3d.utility.Vector3dVector(points)
+            line_set.lines = o3d.utility.Vector2iVector(lines)
+
+            # Append to geometries
+            geometries.append(line_set)
+
+        # Start the visualization
+        o3d.visualization.draw_geometries(geometries)
+
 
 class Envelope(object):
 
@@ -254,10 +324,10 @@ if __name__ == "__main__":
     obj3.rotate(obj2.total_rotation_matrix, matrix=True)
     obj3.translate([380.0/3.2, 284.0/1.5, 380.0/2+5])
 
-    col = Collisions(part_interval=1.5)
-    col.add_parts([obj1, obj2, obj3])
-    col.add_envelope(Envelope(380, 284, 380))
-    collisions = col.total_collisions()
+    scene = Scene(part_interval=1.5)
+    scene.add_parts([obj1, obj2, obj3])
+    scene.add_envelope(Envelope(380, 284, 380))
+    collisions = scene.total_collisions()
     print(collisions)
 
-    utility.visualize([obj1, obj2, obj3, col.build_envelope], option='tree', cmap='Greys')
+    scene.visualize(cmap='Greys')

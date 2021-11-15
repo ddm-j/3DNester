@@ -1,9 +1,4 @@
 import numpy as np
-import open3d as o3d
-import cmapy
-import random
-import geometry
-import itertools
 
 
 def split(xyzmax, xyzmin):
@@ -160,81 +155,6 @@ def rotation_matrix(vector, degrees=True):
     mat[np.abs(mat) < np.finfo(np.float).eps] = 0
 
     return mat
-
-
-def visualize(objects, option='tree', axes=True, cmap='gist_rainbow', discrete=False):
-    # Function Variables
-    geometries = []
-    envelope = None
-
-    # Generate Coordinate Axes
-    if axes:
-        geometries.append(o3d.geometry.TriangleMesh.create_coordinate_frame(size=75))
-
-    # Generate  Part Objects
-    for part in objects:
-        # Skip this object if it is not a "part" (ie, envelope)
-        if part.__class__.__name__ == 'Envelope':
-            envelope = part
-            continue
-
-        # Create octree point cloud
-        pcd = o3d.geometry.PointCloud()
-        pcd.points = o3d.utility.Vector3dVector(part.centers)
-        if discrete:
-            rgb_colors = np.array([cmapy.color(cmap, random.randrange(0, 256, 10), rgb_order=True)
-                                   for i in range(len(part.centers))])
-        else:
-            rgb_colors = np.array([cmapy.color(cmap, random.randrange(0, 256), rgb_order=True)
-                                   for i in range(len(part.centers))])
-        pcd.colors = o3d.utility.Vector3dVector(rgb_colors.astype(np.float)/255.0)
-        d = part.leaf_radius*2
-        size = np.sqrt((d**2)/2)
-
-        if option == 'tree':
-            geometries.append(o3d.geometry.VoxelGrid.create_from_point_cloud(pcd, size))
-        elif option == 'pcd':
-            geometries.append(pcd)
-
-    # Create the build envelope
-    if envelope:
-        x, y, z = envelope.xyzmax
-        # Points in right-hand rule order, bottom to top from origin
-        points = np.array([
-            [0.0, 0.0, 0.0], #0
-            [x, 0.0, 0.0], #1
-            [x, y, 0.0], #2
-            [0, y, 0.0], #3
-            [0.0, 0.0, z], #4
-            [x, 0.0, z], #5
-            [x, y, z], #6
-            [0, y, z] #7
-        ])
-        lines = np.array([
-            [0, 1],
-            [1, 2],
-            [2, 3],
-            [3, 0],
-            [4, 5],
-            [5, 6],
-            [6, 7],
-            [7, 4],
-            [0, 4],
-            [1, 5],
-            [2, 6],
-            [3, 7]
-        ])
-
-        # Create the line-set
-        line_set = o3d.geometry.LineSet()
-        line_set.points = o3d.utility.Vector3dVector(points)
-        line_set.lines = o3d.utility.Vector2iVector(lines)
-
-        # Append to geometries
-        geometries.append(line_set)
-
-    # Start the visualization
-    o3d.visualization.draw_geometries(geometries)
 
 
 def sphere_collision_check(vectors, d):
