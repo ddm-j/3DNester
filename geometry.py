@@ -1,7 +1,7 @@
 import numpy as np
 import open3d as o3d
 import shortuuid
-import utility as utility
+import utility
 import itertools
 import warnings
 import cmapy
@@ -27,6 +27,17 @@ class SphereTree(object):
         bbox_x = max(self.geometry_points[:, 0]) - min(self.geometry_points[:, 0])
         bbox_y = max(self.geometry_points[:, 1]) - min(self.geometry_points[:, 1])
         bbox_z = max(self.geometry_points[:, 2]) - min(self.geometry_points[:, 2])
+        self.bbox_array = 0.5*np.array([
+            [-bbox_x, -bbox_y, -bbox_z],
+            [bbox_x, -bbox_y, -bbox_z],
+            [bbox_x, bbox_y, -bbox_z],
+            [-bbox_x, bbox_y, -bbox_z],
+            [-bbox_x, -bbox_y, bbox_z],
+            [bbox_x, -bbox_y, bbox_z],
+            [bbox_x, bbox_y, bbox_z],
+            [-bbox_x, bbox_y, bbox_z]
+        ])
+        self.bbox = [bbox_x, bbox_y, bbox_z]
         self.root_length = max([bbox_x, bbox_y, bbox_z])
         self.root_radius = np.sqrt(3*self.root_length**2)/2
 
@@ -99,6 +110,14 @@ class SphereTree(object):
             # Translate part back to where it started
             self.centers = utility.translate(self.centers, self.object_center)
 
+        # Update bounding box array
+        self.bbox_array = utility.rotate(self.bbox_array, matrix)
+        self.bbox = [
+            max(self.bbox_array[:, 0]) - min(self.bbox_array[:, 0]),
+            max(self.bbox_array[:, 1]) - min(self.bbox_array[:, 1]),
+            max(self.bbox_array[:, 2]) - min(self.bbox_array[:, 2])
+        ]
+
 
 class Scene(object):
 
@@ -118,7 +137,7 @@ class Scene(object):
         # Envelope
         self.build_envelope = None
 
-    def add_part(self, part):
+    def add_part(self, part, in_loop=False):
 
         if not isinstance(part, SphereTree):
             raise Exception("Cannot at object of type {0} to Collision handler. Part must be of type {1}".format(
@@ -128,12 +147,35 @@ class Scene(object):
         self.parts.update({shortuuid.ShortUUID().random(length=22):
                            part})
 
+        # Update the collision pairs (if this is a single function call, not in a loop)
+        if not in_loop:
+            self.update_collision_pairs()
+
+    def remove_part(self, id, in_loop=False):
+
+        # Remove a part given it's ID
+        self.parts.pop(id)
+
+        # Update the collision pairs (if this is a single function call, not in a loop)
+        if not in_loop:
+            self.update_collision_pairs()
+
+    def remove_parts(self, ids):
+
+        # Remove parts given their IDs
+        for id in ids:
+            self.remove_part(id, in_loop=True)
+
+        # Update collision pairs
         self.update_collision_pairs()
 
     def add_parts(self, parts):
 
         for part in parts:
             self.add_part(part)
+
+        # Update collision pairs
+        self.update_collision_pairs()
 
     def add_envelope(self, envelope):
 
@@ -158,18 +200,19 @@ class Scene(object):
         return count
 
     def total_part_collisions(self):
-
-        # Find Collision Pairs for Sphere Tree Collision Testing
-        root_radius = list(self.parts.values())[0].root_radius
-        point_pairs = np.array([(self.parts[pair[0]].object_center,
-                                self.parts[pair[1]].object_center) for pair in self.collision_pairs])
-        collisions = utility.sphere_collision_check(point_pairs, 2 * root_radius + self.part_interval)
-
-        # Get pairs of trees to perform deeper collision check
-        tree_pairs = self.collision_pairs[np.where(collisions)[0]]
         total_collisions = 0
-        for pair in tree_pairs:
-            total_collisions += self.check_collision(pair)
+        if len(self.parts) > 1:
+
+            # Find Collision Pairs for Sphere Tree Collision Testing
+            root_radius = list(self.parts.values())[0].root_radius
+            point_pairs = np.array([(self.parts[pair[0]].object_center,
+                                    self.parts[pair[1]].object_center) for pair in self.collision_pairs])
+            collisions = utility.sphere_collision_check(point_pairs, 2 * root_radius + self.part_interval)
+
+            # Get pairs of trees to perform deeper collision check
+            tree_pairs = self.collision_pairs[np.where(collisions)[0]]
+            for pair in tree_pairs:
+                total_collisions += self.check_collision(pair)
 
         return total_collisions
 

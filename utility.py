@@ -1,4 +1,5 @@
 import numpy as np
+from random import gauss
 
 
 def split(xyzmax, xyzmin):
@@ -172,6 +173,14 @@ def rect_collision_check(vectors, envelope, d):
     xyzmax = envelope[1]
 
     # Calculate X, Y, & Z vectors in envelope bounds
-    collisions = np.invert(np.all(np.logical_and(vectors-d-xyzmin >= 0, vectors+d-xyzmax <= 0), axis=1))
+    #collisions = np.invert(np.all(np.logical_and(vectors-d-xyzmin >= 0, vectors+d-xyzmax <= 0), axis=1))
+    collisions = np.invert(np.logical_and(np.all(xyzmax-vectors-d >= 0, axis=1), np.all(xyzmin-vectors+d <= 0, axis=1)))
 
     return collisions
+
+
+def make_rand_vector(dims, d):
+    vec = [gauss(0, 1) for i in range(dims)]
+    mag = sum(x**2 for x in vec) ** .5
+    norm = [x/mag for x in vec]
+    return np.array([x*d for x in norm]).reshape((dims,))
