@@ -7,7 +7,6 @@ import warnings
 import cmapy
 import random
 import utility_cy as uc
-import numba as nb
 from copy import copy, deepcopy
 
 
@@ -16,30 +15,31 @@ class SphereTree(object):
 
     def __init__(self, file_path, min_voxel):
 
-        # Generate the point cloud
+        # Generate the point cloud, prepare for affine transforms
         max_voxel_sa = (min_voxel ** 2) * np.sqrt(2)
         point_density = 15 / max_voxel_sa
         mesh = o3d.io.read_triangle_mesh(file_path)
         surface_area = mesh.get_surface_area()
         min_points = round(surface_area * point_density)
         pcd = mesh.sample_points_poisson_disk(min_points)
-        self.geometry_points = np.array(pcd.points)
+        ones = np.ones((1, len(pcd.points))).T
+        self.geometry_points = np.concatenate((np.array(pcd.points), ones), axis=1)
 
         # Get root node dimension
         bbox_x = max(self.geometry_points[:, 0]) - min(self.geometry_points[:, 0])
         bbox_y = max(self.geometry_points[:, 1]) - min(self.geometry_points[:, 1])
         bbox_z = max(self.geometry_points[:, 2]) - min(self.geometry_points[:, 2])
         self.bbox_array = 0.5*np.array([
-            [-bbox_x, -bbox_y, -bbox_z],
-            [bbox_x, -bbox_y, -bbox_z],
-            [bbox_x, bbox_y, -bbox_z],
-            [-bbox_x, bbox_y, -bbox_z],
-            [-bbox_x, -bbox_y, bbox_z],
-            [bbox_x, -bbox_y, bbox_z],
-            [bbox_x, bbox_y, bbox_z],
-            [-bbox_x, bbox_y, bbox_z]
+            [-bbox_x, -bbox_y, -bbox_z, 1],
+            [bbox_x, -bbox_y, -bbox_z, 1],
+            [bbox_x, bbox_y, -bbox_z, 1],
+            [-bbox_x, bbox_y, -bbox_z, 1],
+            [-bbox_x, -bbox_y, bbox_z, 1],
+            [bbox_x, -bbox_y, bbox_z, 1],
+            [bbox_x, bbox_y, bbox_z, 1],
+            [-bbox_x, bbox_y, bbox_z, 1]
         ])
-        self.bbox = [bbox_x, bbox_y, bbox_z]
+        self.bbox = [bbox_x, bbox_y, bbox_z, 1]
         self.root_length = max([bbox_x, bbox_y, bbox_z])
         self.root_radius = np.sqrt(3*self.root_length**2)/2
 
@@ -52,73 +52,117 @@ class SphereTree(object):
         z_c = min(self.geometry_points[:, 2]) + bbox_z/2
         pcd.translate([-x_c, -y_c, -z_c])
         self.geometry_points = np.array(pcd.points)
-        self.object_center = np.array([0, 0, 0])
+        self.center = np.array([0, 0, 0, 1])
 
         # Get xyz min/max
         # Credit to: https://codereview.stackexchange.com/questions/126521/python-octree-implementation
         xyzmin = np.array([-self.root_length/2]*3)
         xyzmax = np.array([self.root_length/2]*3)
 
-        # Generate the octree & sphere tree
+        # Generate the octree & sphere tree, format sphere points for affine transforms
         nodes = utility.split(xyzmax, xyzmin)
         leafs = np.array(utility.generate_tree(self.geometry_points, nodes, max_depth=max_depth))
-        self.leaf_radius, self.centers = utility.generate_spheres(leafs)
+        self.leaf_radius, centers = utility.generate_spheres(leafs)
+        ones = np.ones((1, len(centers))).T
+        self.points = np.concatenate((centers, ones), axis=1)
 
-        # Keep a "total rotation matrix" that will update every time rotate() is called
-        self.total_rotation_matrix = None
+        # Generate Basic Translation, Rotation, and history matrices
+        self.position_matrix = np.eye(4)
+        self.trans_matrix = np.eye(4)
+        self.rot_matrix = np.zeros((4,4))
+        self.rot_matrix[3, 3] = 1
+
+    def apply_transforms(self):
+
+        # Outputs part center and points after transformations are applied.
+        # If inplace is used, the transforms will be applied to the part. Rotations section will be reset (identity)
+
+        center = utility.transform(self.center, self.position_matrix, rows=True)
+        points = utility.transform(self.points, self.position_matrix, rows=True)
+
+        return center, points
 
     def translate(self, vector, absolute=False):
 
-        # Apply absolute translation to sphere centers
+        # Convert vector to list
+        vector = list(vector)
+
+        # Format vector for affine
+        if len(vector) == 3:
+            vector.append(1)
+        matrix = copy(self.trans_matrix)
+
+        # Apply absolute translation to position matrix
         if absolute:
-            d = vector - self.object_center
-            self.object_center = utility.translate(self.object_center, d)
-            self.centers = utility.translate(self.centers, d)
+            d = vector - self.center
+            matrix[:, 3] = d
 
-        # Apply relative translation to sphere centers
+        # Apply relative translation to position matrix
         else:
-            self.object_center = utility.translate(self.object_center, vector)
-            self.centers = utility.translate(self.centers, vector)
+            matrix[:, 3] = vector
 
-    def rotate(self, vector, matrix=False, origin=False):
+        # Perform Affine Transform
+        self.position_matrix = utility.transform(self.position_matrix, matrix)
+
+    def rotate(self, vector, matrix=False):
+        # Preprocess arguments
         if matrix:
             # "Vector" argument is actually a rotation matrix
-            matrix = vector
+            mat = vector
         else:
             # Get Rotation Matrix
-            matrix = utility.rotation_matrix(vector)
+            mat = utility.rotation_matrix(vector)
 
-        # Update rotation history
-        if self.total_rotation_matrix is None:
-            # This is the first rotation, initializing matrix
-            self.total_rotation_matrix = matrix
-        else:
-            # This is not our first rotation, update total rotation matrix
-            self.total_rotation_matrix = np.matmul(matrix, self.total_rotation_matrix)
+        # Get the stock affine rotation matrix
+        matrix = copy(self.rot_matrix)
+        matrix[0:3, 0:3] = mat
 
-        # Apply point rotations about the origin
-        if origin:
-            self.object_center = utility.rotate(self.object_center, matrix)
-            self.centers = utility.rotate(self.centers, matrix)
+        # Perform Rotation about part origin
+        self.position_matrix = utility.transform(self.position_matrix, matrix)
 
-        # Apply rotation from "part" center (center of the root node bounding box)
-        else:
-            # Translate part to the origin
-            self.centers = utility.translate(self.centers, -self.object_center)
-
-            # Perform Rotation
-            self.centers = utility.rotate(self.centers, matrix)
-
-            # Translate part back to where it started
-            self.centers = utility.translate(self.centers, self.object_center)
 
         # Update bounding box array
-        self.bbox_array = utility.rotate(self.bbox_array, matrix)
+        self.bbox_array = utility.transform(self.bbox_array, matrix, rows=True)
         self.bbox = [
             max(self.bbox_array[:, 0]) - min(self.bbox_array[:, 0]),
             max(self.bbox_array[:, 1]) - min(self.bbox_array[:, 1]),
             max(self.bbox_array[:, 2]) - min(self.bbox_array[:, 2])
         ]
+
+    def visualize(self, option='tree', axes=True, cmap='gist_rainbow', discrete=True):
+
+        # Visualize the current geometry
+
+        # Apply transforms to the geometry
+        _, points = self.apply_transforms()
+
+        # Function Variables
+        geometries = []
+
+        # Generate Coordinate Axes
+        if axes:
+            geometries.append(o3d.geometry.TriangleMesh.create_coordinate_frame(size=75))
+
+        pcd = o3d.geometry.PointCloud()
+        pcd.points = o3d.utility.Vector3dVector(points[:, 0:3])
+        if discrete:
+            rgb_colors = np.array([cmapy.color(cmap, random.randrange(0, 256, 10), rgb_order=True)
+                                   for i in range(len(points))])
+        else:
+            rgb_colors = np.array([cmapy.color(cmap, random.randrange(0, 256), rgb_order=True)
+                                   for i in range(len(points))])
+
+        pcd.colors = o3d.utility.Vector3dVector(rgb_colors.astype(np.float) / 255.0)
+        d = self.leaf_radius * 2
+        size = np.sqrt((d ** 2) / 2)
+
+        if option == 'tree':
+            geometries.append(o3d.geometry.VoxelGrid.create_from_point_cloud(pcd, size))
+        elif option == 'pcd':
+            geometries.append(pcd)
+
+        # Start the visualization
+        o3d.visualization.draw_geometries(geometries)
 
 
 class Scene(object):
@@ -129,9 +173,11 @@ class Scene(object):
         self.part_interval = part_interval
         self.envelope_interval = envelope_interval
 
-        # Setup Part Dictionary
-        self.parts = {
-        }
+        # Setup Scene Data Structures
+        # Center Point List (tracks origin points of all objects in the scene)
+        self.cp_arr = []
+        # Rotation Matrix List (tracks
+        self.rot_arr = []
 
         # Combination Tracker
         self.collision_pairs = None
@@ -370,8 +416,27 @@ if __name__ == "__main__":
 
     file = 'meshes/GenerativeBracket.stl'
     obj1 = SphereTree(file, 10)
+    print('Translating Part')
     obj1.translate([380.0/2.5, 284.0/4+30, 60+20])
+    obj1.visualize()
+    print('Current Position Matrix')
+    print(obj1.position_matrix)
+    print('Rotating Part')
+    obj1.rotate([90, 0, 0])
+    obj1.visualize()
+    print('Current Position Matrix')
+    print(obj1.position_matrix)
+    print('Center Before Transform')
+    print(obj1.center)
+    obj1.apply_transforms()
+    obj1.visualize()
+    print('Center after transform')
+    print(obj1.center)
+    print('Reset Position Matrix (rotations)')
+    print(obj1.position_matrix)
 
+
+'''
     obj2 = SphereTree(file, 10)
     obj2.rotate([90, 0, 0])
     obj2.rotate([45, 90, 0])
@@ -388,3 +453,5 @@ if __name__ == "__main__":
     print(collisions)
 
     scene.visualize(cmap='Greys')
+    
+'''

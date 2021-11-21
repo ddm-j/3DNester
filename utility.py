@@ -119,9 +119,23 @@ def translate(points, vector):
     return points + vector
 
 
-def rotate(points, matrix):
+def transform(a, b, rows=False):
+    # Performs affine transform of b (vector or matrix) using A (matrix)
 
-    return np.transpose(np.matmul(matrix, np.transpose(points)))
+    if rows:
+        # This is used when points are passed as (n, d) where n = number of points, d = point dimensions
+        b = np.transpose(b)
+        out = np.matmul(a, b)
+    else:
+        out = np.matmul(a, b)
+
+    '''print('PERFORMING TRANSFORM\n'
+          'Matrix A:\n'
+          '{0}\n'
+          'Matrix B:\n'
+          '{1}'.format(a,b))'''
+
+    return out
 
 
 def rotation_matrix(vector, degrees=True):
