@@ -137,7 +137,7 @@ class Nester(object):
 
             search = True
             j = 0
-            while j < 50:
+            while j < 30:
                 # Initialize counter for move tests at this temperature
                 # Generate a new state & test fitness
                 move = self.move_set.sample(n=1, weights=self.move_set['prob'])
@@ -151,6 +151,10 @@ class Nester(object):
 
 if __name__ == "__main__":
 
+    import cProfile
+    pr = cProfile.Profile()
+    pr.enable()
+
     # Create a part, envelope, and scene
     part = geo.SphereTree('meshes/GenerativeBracket.stl', 10)
     scene = geo.Scene(part_interval=0, envelope_interval=0)
@@ -163,4 +167,7 @@ if __name__ == "__main__":
     # Create the Nester
     nester = Nester(scene)
     nester.anneal()
+
+    pr.disable()
+    pr.print_stats(sort='time')
     scene.visualize()

@@ -2,3 +2,6 @@
 __pycache__
 build
 references
+*.html
+*.c
+*.pyd

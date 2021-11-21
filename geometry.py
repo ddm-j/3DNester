@@ -6,6 +6,8 @@ import itertools
 import warnings
 import cmapy
 import random
+import utility_cy as uc
+import numba as nb
 from copy import copy, deepcopy
 
 
@@ -187,14 +189,21 @@ class Scene(object):
         combos = list(itertools.combinations(ids, 2))
         self.collision_pairs = np.array(list(set(combos)))
 
-    def check_collision(self, ids):
+    def check_collision(self, ids, method='cy'):
 
         # Gets total collisions between two parts given IDs
         r = self.parts[ids[0]].leaf_radius
-        combos = np.array(list(itertools.product(*[self.parts[i].centers for i in ids])))
+
+        if method == None:
+            combos = np.array(list(itertools.product(*[self.parts[i].centers for i in ids])))
+        elif method == 'cy':
+            combos = uc.collision_pairs(self.parts[ids[0]].centers, self.parts[ids[1]].centers)
+        elif method == 'new':
+            combos = utility.cartesian(*[self.parts[i].centers for i in ids])
 
         # Check collisions
         collisions = utility.sphere_collision_check(combos, 2 * r + self.part_interval)
+
         count = np.count_nonzero(collisions)
 
         return count
@@ -209,8 +218,15 @@ class Scene(object):
                                     self.parts[pair[1]].object_center) for pair in self.collision_pairs])
             collisions = utility.sphere_collision_check(point_pairs, 2 * root_radius + self.part_interval)
 
-            # Get pairs of trees to perform deeper collision check
+            # Perform deeper collision check (computationally expensive)
             tree_pairs = self.collision_pairs[np.where(collisions)[0]]
+
+            # Process "tree_pairs" into an (m, 2, n, 3) array
+            point_arr = np.array([
+                [self.parts[p[0]].centers, self.parts[p[1]].centers] for p in tree_pairs
+            ])
+            uc.all_collision_pairs(point_arr)
+
             for pair in tree_pairs:
                 total_collisions += self.check_collision(pair)
 
@@ -251,8 +267,6 @@ class Scene(object):
         # Generate Coordinate Axes
         if axes:
             geometries.append(o3d.geometry.TriangleMesh.create_coordinate_frame(size=75))
-
-        print(self.parts)
 
         # Generate  Part Objects
         for part in self.parts.values():
