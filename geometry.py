@@ -7,6 +7,7 @@ import warnings
 import cmapy
 import random
 import utility_cy as uc
+import math
 from copy import copy, deepcopy
 
 
@@ -167,7 +168,7 @@ class SphereTree(object):
 
 class Scene(object):
 
-    def __init__(self, part_interval=2.5, envelope_interval=0):
+    def __init__(self, reference_part, part_interval=2.5, envelope_interval=0):
 
         # Intervals
         self.part_interval = part_interval
@@ -175,29 +176,75 @@ class Scene(object):
 
         # Setup Scene Data Structures
         # Center Point List (tracks origin points of all objects in the scene)
-        self.cp_arr = []
-        # Rotation Matrix List (tracks
-        self.rot_arr = []
+        self.center_points = []
+        # Affine Matrix List (tracks position & rotation of objects in the scene)
+        self.affines = []
+        # Part Movement List (tracks if part has moved in last update, Boolean)
+        self.moves = []
+        # Collision Pairing List (tracks n^2 collision pairs between parts)
+        self.collision_pairs = []
+        # Collision History (tracks boolean collision of n^2 pairs from last update)
+        self.collision_hist = []
 
-        # Combination Tracker
-        self.collision_pairs = None
+        # Dictionary
+        self.parts = {
+            'centers':self.center_points,
+            'affine':self.affines,
+            'moves':self.moves,
+            'col_pairs':self.collision_pairs
+        }
+
+        # Part Octree Array - base coordinates of a part's octree. As they were on part import through o3d.
+        # These coordinates will be multiplied by affine matrices on an as-needed basis.
+        # We assume that new parts have coordinates of (0, 0, 0) (bounding box centered during import)
+        self.reference_part = reference_part
+        self.part_points = reference_part.points
 
         # Envelope
         self.build_envelope = None
 
-    def add_part(self, part, in_loop=False):
+    def add_part(self, location=None, debug=True):
 
-        if not isinstance(part, SphereTree):
-            raise Exception("Cannot at object of type {0} to Collision handler. Part must be of type {1}".format(
-                type(part), SphereTree
-            ))
+        # Registers a new part in the scene. Returns index of the part
+        # Register new center point
+        location = location if location is not None else [0.0, 0.0, 0.0]
+        location.append(1)
+        self.center_points.append(np.array(location))
 
-        self.parts.update({shortuuid.ShortUUID().random(length=22):
-                           part})
+        # Register new affine matrix
+        aff = np.eye(4)
+        aff[:,3] = location
+        self.affines.append(aff)
 
-        # Update the collision pairs (if this is a single function call, not in a loop)
-        if not in_loop:
-            self.update_collision_pairs()
+        # Initialize movement. By default new part is registered as a "move" in most recent update
+        self.moves.append(True)
+
+        # Initialize collision pairs and collision history
+        if len(self.center_points) > 1:
+            # Only register new pairs if we can have 1 or more pairs
+            n = len(self.center_points)
+            ind = n - 1
+            new_pairs = [[ind, j] for j in range(0, n-1)]
+            self.collision_pairs += new_pairs
+
+            # Register collision history. Default to False: "no collision on last update"
+            self.collision_hist.extend([False for i in range(0, n-1)])
+
+        # This checks all lengths/indices to make sure that things are in order
+        if debug:
+            # Check that the index of the part lists are equal
+            cond = len(self.center_points) == len(self.affines) == len(self.moves)
+            if not cond:
+                raise Exception('Tracking lists are not equal')
+
+            # Check if we have the correct number of combinations for the given number of parts
+            if len(self.center_points) > 1:
+                # Only check if we can have a non-zero number of pairs
+                n = len(self.center_points)
+                c = int(math.factorial(n)/(2*math.factorial(n-2)))
+                if len(self.collision_pairs) != c or len(self.collision_hist) != c:
+                    raise Exception('n={0}: Number of collision pairs, history, and theory are not equal: {1}, {2}, {3}'
+                                    .format(n, len(self.collision_pairs), len(self.collision_hist), c))
 
     def remove_part(self, id, in_loop=False):
 
@@ -414,6 +461,8 @@ class Envelope(object):
 
 if __name__ == "__main__":
 
+    '''
+
     file = 'meshes/GenerativeBracket.stl'
     obj1 = SphereTree(file, 10)
     print('Translating Part')
@@ -436,7 +485,6 @@ if __name__ == "__main__":
     print(obj1.position_matrix)
 
 
-'''
     obj2 = SphereTree(file, 10)
     obj2.rotate([90, 0, 0])
     obj2.rotate([45, 90, 0])
@@ -455,3 +503,12 @@ if __name__ == "__main__":
     scene.visualize(cmap='Greys')
     
 '''
+
+    file = 'meshes/GenerativeBracket.stl'
+    obj1 = SphereTree(file, 10)
+    scene = Scene(obj1)
+
+    for i in range(1, 5):
+        scene.add_part(debug=True)
+        print(scene.collision_pairs)
+
