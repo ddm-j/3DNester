@@ -5,7 +5,7 @@ from libc.math cimport sqrt
 
 @cython.boundscheck(False)
 @cython.wraparound(False)
-cpdef np.ndarray[np.float_t, ndim=3] collision_pairs(double[:,:] a, double[:,:] b):
+cpdef np.ndarray[np.float_t, ndim=3] collision_point_pairs(double[:,:] a, double[:,:] b):
 
     # Type Variables
     cdef int i, j, cnt, a_shape, b_shape
@@ -26,24 +26,65 @@ cpdef np.ndarray[np.float_t, ndim=3] collision_pairs(double[:,:] a, double[:,:] 
 
     return arr
 
-cpdef np.ndarray[np.float_t, ndim=3] all_collision_pairs(double[:, :, :, :] arr):
+#@cython.boundscheck(False)
+#@cython.wraparound(False)
+cpdef np.ndarray[np.float_t, ndim=2] collision_pairs(double[:] a, n):
 
     # Type Variables
-    cdef int i, j, k, m, n, s
-    m = arr.shape[0]
-    n = arr.shape[2]*arr.shape[2]
-    s = m*n
-    print(m, n, s)
-    cdef np.ndarray[np.float_t, ndim=3] out = np.empty((s, 2, 3), dtype=np.float)
-    cdef double [:, :, :] out_view = out
-    cdef double [:, :, :] temp1
-    cdef double [:, :, :] temp2
+    cdef int i, j, cnt, a_shape, b_shape
+    a_shape = a.shape[0]
+    cdef np.ndarray[np.float_t, ndim=2] arr = np.empty((n+1, 2), dtype=np.float)
+    cdef double [:, :] arr_view = arr
+    cnt = 0
 
     # Loop
-    for i in range(m):
-        # Loop through each "pair" of object data
-        print(i*m*n, (i+1)*m*n)
-        print(out_view[i*m:(i+1)*m+1, :, :].shape)
-        out_view[i*m:(i+1)*m+1, :, :] = collision_pairs(arr[i, 0, :, :], arr[i, 1, :, :])[:]
+    for i in range(a_shape):
+        print(i)
+        for j in range(a_shape):
+            if i == j:
+                continue
 
-    return out
+            # Double Slice
+            arr_view[cnt,0] = i
+            arr_view[cnt,1] = j
+
+            cnt += 1
+
+    return arr
+
+
+cpdef remove_pairs(int index, int n, np.ndarray[np.float_t, ndim=2] pairs, np.ndarray[np.float_t, ndim=1] hist):
+
+    cdef int i, pair_shape, ind
+    cdef double a, b
+    cdef np.ndarray[np.float_t, ndim=2] new_pairs = np.empty((n, 2), dtype=np.float)
+    cdef np.ndarray[np.float_t, ndim=1] new_hist = np.empty((n,), dtype=np.float)
+    cdef double[:, :] old_pair_view = pairs
+    cdef double[:] old_hist_view = hist
+    cdef double[:, :] pair_view = new_pairs
+    cdef double[:] hist_view = new_hist
+    print(n)
+    ind = index
+    pair_shape = pairs.shape[0]
+    for i in range(pair_shape):
+        print(i)
+        a = old_pair_view[i, 0]
+        b = old_pair_view[i, 1]
+
+        # Skip this index if we are removing this pair
+        if a == ind or b == ind:
+            continue
+
+        # Update indices
+        if a > ind:
+            pair_view[i, 0] -= 1
+        elif b > ind:
+            pair_view[i, 1] -= 1
+        else:
+            pair_view[i, 0] = a
+            pair_view[i, 1] = b
+
+        # Update History
+        hist_view[i] = old_hist_view[i]
+
+    return new_pairs, new_hist

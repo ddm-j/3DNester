@@ -8,6 +8,7 @@ import cmapy
 import random
 import utility_cy as uc
 import math
+import time
 from copy import copy, deepcopy
 
 
@@ -168,30 +169,36 @@ class SphereTree(object):
 
 class Scene(object):
 
-    def __init__(self, reference_part, part_interval=2.5, envelope_interval=0):
+    def __init__(self, reference_part, part_interval=2.5, envelope_interval=0, max_parts = 5000):
 
         # Intervals
         self.part_interval = part_interval
         self.envelope_interval = envelope_interval
 
         # Setup Scene Data Structures
+
+        # Track the number of parts & number of possible collision pairs in the scene
+        self.n_parts = 0
+        self.n_pairs = 0
+
         # Center Point List (tracks origin points of all objects in the scene)
         self.center_points = []
         # Affine Matrix List (tracks position & rotation of objects in the scene)
         self.affines = []
         # Part Movement List (tracks if part has moved in last update, Boolean)
         self.moves = []
-        # Collision Pairing List (tracks n^2 collision pairs between parts)
-        self.collision_pairs = []
-        # Collision History (tracks boolean collision of n^2 pairs from last update)
-        self.collision_hist = []
+        # Collision Pairing & History Array, tracks n^2 collision pairs and history of collision (last update)
+        # using a (max parts, max parts) sized array. Create "upper triangular" masking array for selecting
+        # ordered collision pair indices from the matrix.
+        self.coll_arr = np.zeros((max_parts, max_parts), dtype=bool)
+        self.tri_mask = np.less.outer(np.arange(max_parts), np.arange(max_parts))
 
         # Dictionary
         self.parts = {
-            'centers':self.center_points,
-            'affine':self.affines,
-            'moves':self.moves,
-            'col_pairs':self.collision_pairs
+            'centers': self.center_points,
+            'affine': self.affines,
+            'moves': self.moves,
+            'col_arr': self.coll_arr
         }
 
         # Part Octree Array - base coordinates of a part's octree. As they were on part import through o3d.
@@ -203,9 +210,22 @@ class Scene(object):
         # Envelope
         self.build_envelope = None
 
+    def debug(self):
+
+        # Check that the index of the part lists are equal
+        cond = len(self.center_points) == len(self.affines) == len(self.moves) == self.n_parts
+        if not cond:
+            raise Exception('Tracking lists are not equal.\n'
+                            'Center points: {0}\n'
+                            'Affine Matrices: {1}\n'
+                            'Move History: {2}\n'
+                            '# Parts: {3}'.format(self.center_points, self.affines, self.moves, self.n_parts))
+
     def add_part(self, location=None, debug=True):
 
         # Registers a new part in the scene. Returns index of the part
+        self.n_parts += 1
+
         # Register new center point
         location = location if location is not None else [0.0, 0.0, 0.0]
         location.append(1)
@@ -213,64 +233,74 @@ class Scene(object):
 
         # Register new affine matrix
         aff = np.eye(4)
-        aff[:,3] = location
+        aff[:, 3] = location
         self.affines.append(aff)
 
         # Initialize movement. By default new part is registered as a "move" in most recent update
         self.moves.append(True)
 
-        # Initialize collision pairs and collision history
-        if len(self.center_points) > 1:
-            # Only register new pairs if we can have 1 or more pairs
-            n = len(self.center_points)
-            ind = n - 1
-            new_pairs = [[ind, j] for j in range(0, n-1)]
-            self.collision_pairs += new_pairs
-
-            # Register collision history. Default to False: "no collision on last update"
-            self.collision_hist.extend([False for i in range(0, n-1)])
+        # Collision pairs do not need initialization. Array is already initialized.
+        # self.pat_on_the_back
+        #self.update_n_pairs()
 
         # This checks all lengths/indices to make sure that things are in order
         if debug:
-            # Check that the index of the part lists are equal
-            cond = len(self.center_points) == len(self.affines) == len(self.moves)
-            if not cond:
-                raise Exception('Tracking lists are not equal')
+            self.debug()
 
-            # Check if we have the correct number of combinations for the given number of parts
-            if len(self.center_points) > 1:
-                # Only check if we can have a non-zero number of pairs
-                n = len(self.center_points)
-                c = int(math.factorial(n)/(2*math.factorial(n-2)))
-                if len(self.collision_pairs) != c or len(self.collision_hist) != c:
-                    raise Exception('n={0}: Number of collision pairs, history, and theory are not equal: {1}, {2}, {3}'
-                                    .format(n, len(self.collision_pairs), len(self.collision_hist), c))
+    def remove_part(self, index, debug=False):
 
-    def remove_part(self, id, in_loop=False):
+        # Check if we can remove any more parts
+        if self.n_parts == 0:
+            warnings.warn("remove_part called with 0 parts remaining in the scene.")
+            return
 
-        # Remove a part given it's ID
-        self.parts.pop(id)
+        # Remove part from center point list
+        self.center_points.pop(index)
 
-        # Update the collision pairs (if this is a single function call, not in a loop)
-        if not in_loop:
-            self.update_collision_pairs()
+        # Remove part from affine list
+        self.affines.pop(index)
 
-    def remove_parts(self, ids):
+        # Remove part from moves list
+        self.moves.pop(index)
 
-        # Remove parts given their IDs
-        for id in ids:
-            self.remove_part(id, in_loop=True)
+        # Remove part from collision pairs matrix (perform shifting)
+        # Set part row & column to zero
+        self.coll_arr[index, :] = 0
+        self.coll_arr[:, index] = 0
+        # Shift the rows/columns bigger than index "up one row & over (left) one column"
+        self.coll_arr[index:-1, index:-1] = self.coll_arr[index + 1:, index + 1:]
+        # Set last column = 0
+        self.coll_arr[:, -1] = 0
 
-        # Update collision pairs
-        self.update_collision_pairs()
+        # Update the counters
+        self.n_parts -= 1
+        #self.update_n_pairs()
 
-    def add_parts(self, parts):
+        # Debug if necessary
+        if debug:
+            self.debug()
 
-        for part in parts:
-            self.add_part(part)
+    def update_n_pairs(self):
 
-        # Update collision pairs
-        self.update_collision_pairs()
+        if self.n_parts < 2:
+            self.n_pairs = 0
+        else:
+            self.n_pairs = int(math.factorial(self.n_parts)/(2*math.factorial(self.n_parts-2)))
+
+    def get_collision_pairs(self, with_history=True):
+
+        # Update number of possible pairs (based on theory)
+        self.update_n_pairs()
+
+        # Get pair list
+        if with_history:
+            # Return pairs that are masked by collision history
+            pairs = np.argwhere(np.logical_and(self.coll_arr, self.tri_mask))
+        else:
+            # Return all "possible" collision pairs between parts in the scene
+            pairs = np.argwhere(self.tri_mask)[0:self.n_pairs-1]
+
+        return pairs
 
     def add_envelope(self, envelope):
 
@@ -290,7 +320,7 @@ class Scene(object):
         if method == None:
             combos = np.array(list(itertools.product(*[self.parts[i].centers for i in ids])))
         elif method == 'cy':
-            combos = uc.collision_pairs(self.parts[ids[0]].centers, self.parts[ids[1]].centers)
+            combos = uc.collision_point_pairs(self.parts[ids[0]].centers, self.parts[ids[1]].centers)
         elif method == 'new':
             combos = utility.cartesian(*[self.parts[i].centers for i in ids])
 
@@ -508,7 +538,31 @@ if __name__ == "__main__":
     obj1 = SphereTree(file, 10)
     scene = Scene(obj1)
 
-    for i in range(1, 5):
-        scene.add_part(debug=True)
-        print(scene.collision_pairs)
+    t0 = time.time()
+    for i in range(1, 1000):
+        scene.add_part()
+        #print(scene.n_parts, scene.n_pairs)
+        #if i > 10:
+        #    break
 
+    t1 = time.time()
+    print(t1-t0)
+
+    import cProfile
+
+    pr = cProfile.Profile()
+    pr.enable()
+
+    t2 = time.time()
+    for i in range(1, 1000):
+        scene.remove_part(0)
+        #scene.get_collision_pairs(with_history=False)
+        #print(scene.n_parts, scene.n_pairs)
+        #if i > 10:
+        #    break
+    t3 = time.time()
+
+    print(t3-t2)
+
+    pr.disable()
+    pr.print_stats(sort='time')

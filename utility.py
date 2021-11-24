@@ -1,6 +1,5 @@
 import numpy as np
 from random import gauss
-import numba as nb
 
 
 def split(xyzmax, xyzmin):
