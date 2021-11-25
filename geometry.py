@@ -5,7 +5,7 @@ import utility
 import itertools
 import warnings
 import cmapy
-import random
+import random as rand
 import utility_cy as uc
 import math
 import time
@@ -76,13 +76,13 @@ class SphereTree(object):
         self.rot_matrix = np.zeros((4,4))
         self.rot_matrix[3, 3] = 1
 
-    def apply_transforms(self):
+    def apply_transforms(self, matrix=None):
 
         # Outputs part center and points after transformations are applied.
         # If inplace is used, the transforms will be applied to the part. Rotations section will be reset (identity)
 
-        center = utility.transform(self.center, self.position_matrix, rows=True)
-        points = utility.transform(self.points, self.position_matrix, rows=True)
+        center = utility.transform(self.center, matrix if matrix is not None else self.position_matrix, rows=True)
+        points = utility.transform(self.points, matrix if matrix is not None else self.position_matrix, rows=True)
 
         return center, points
 
@@ -194,6 +194,8 @@ class Scene(object):
         # ordered collision pair indices from the matrix.
         self.coll_arr = np.zeros((max_parts, max_parts), dtype=float)
         self.tri_mask = np.less.outer(np.arange(max_parts), np.arange(max_parts))
+        # Envelope Collision History
+        self.env_coll = []
 
         # Dictionary
         self.parts = {
@@ -208,6 +210,8 @@ class Scene(object):
         # We assume that new parts have coordinates of (0, 0, 0) (bounding box centered during import)
         self.reference_part = reference_part
         self.part_points = reference_part.points
+        self.sphere_radius = reference_part.root_radius
+        self.leaf_radius = reference_part.leaf_radius
 
         # Envelope
         self.build_envelope = None
@@ -223,12 +227,15 @@ class Scene(object):
                             'Move History: {2}\n'
                             '# Parts: {3}'.format(self.center_points, self.affines, self.moves, self.n_parts))
 
-    def add_part(self, location=None, debug=True):
+    def add_part(self, location=None, random=None, debug=True):
 
         # Registers a new part in the scene. Returns index of the part
         self.n_parts += 1
 
         # Register new center point
+        if random:
+            # Make a random starting location
+            location = [rand.uniform(random[0],random[1]) for _ in range(3)]
         location = location if location is not None else [0.0, 0.0, 0.0]
         location.append(1)
         self.center_points.append(np.array(location))
@@ -243,13 +250,16 @@ class Scene(object):
 
         # Collision pairs do not need initialization. Array is already initialized.
         # self.pat_on_the_back
-        #self.update_n_pairs()
+        self.update_n_pairs()
+
+        # Register new part-environment collision history element
+        self.env_coll.append(0)
 
         # This checks all lengths/indices to make sure that things are in order
         if debug:
             self.debug()
 
-    def remove_part(self, index, debug=False, cy=False):
+    def remove_part(self, index, debug=False):
 
         # Check if we can remove any more parts
         if self.n_parts == 0:
@@ -273,6 +283,9 @@ class Scene(object):
         # self.coll_arr[index:-1, index:-1] = self.coll_arr[index + 1:, index + 1:]
         # self.coll_arr[0, index:-1] = self.coll_arr[0, index + 1:]
         # self.coll_arr[:, self.n_parts-1:] = 0
+
+        # Remove part from part-environment collision list
+        self.env_coll.pop(index)
 
         # Update the counters
         self.n_parts -= 1
@@ -308,54 +321,60 @@ class Scene(object):
 
         self.build_envelope = envelope
 
-    def update_collision_pairs(self):
-
-        ids = list(self.parts.keys())
-        combos = list(itertools.combinations(ids, 2))
-        self.collision_pairs = np.array(list(set(combos)))
-
-    def check_collision(self, ids, method='cy'):
-
-        # Gets total collisions between two parts given IDs
-        r = self.parts[ids[0]].leaf_radius
-
-        if method == None:
-            combos = np.array(list(itertools.product(*[self.parts[i].centers for i in ids])))
-        elif method == 'cy':
-            combos = uc.collision_point_pairs(self.parts[ids[0]].centers, self.parts[ids[1]].centers)
-        elif method == 'new':
-            combos = utility.cartesian(*[self.parts[i].centers for i in ids])
-
-        # Check collisions
-        collisions = utility.sphere_collision_check(combos, 2 * r + self.part_interval)
-
-        count = np.count_nonzero(collisions)
-
-        return count
-
-    def total_part_collisions(self):
-        total_collisions = 0
+    @profile
+    def part_collisions(self, indices, print_collisions=False):
         if len(self.parts) > 1:
 
-            # Find Collision Pairs for Sphere Tree Collision Testing
-            root_radius = list(self.parts.values())[0].root_radius
-            point_pairs = np.array([(self.parts[pair[0]].object_center,
-                                    self.parts[pair[1]].object_center) for pair in self.collision_pairs])
-            collisions = utility.sphere_collision_check(point_pairs, 2 * root_radius + self.part_interval)
-
-            # Perform deeper collision check (computationally expensive)
-            tree_pairs = self.collision_pairs[np.where(collisions)[0]]
-
-            # Process "tree_pairs" into an (m, 2, n, 3) array
-            point_arr = np.array([
-                [self.parts[p[0]].centers, self.parts[p[1]].centers] for p in tree_pairs
+            # BROAD PHASE ALGORITHM
+            # Instantiate collision data for the selected indices
+            coll_data = np.zeros((self.n_parts, len(indices)))
+            # Get collision pairs for broad testing
+            pairs = np.array([[ind, j] for ind in indices for j in range(self.n_parts-1) if ind != j])
+            # Form matrix of center points for broad collision test
+            center_points = np.array([
+                [self.center_points[i] for i in j] for j in pairs
             ])
-            uc.all_collision_pairs(point_arr)
+            # Get pairs for deeper collision test
+            deep_pairs = pairs[
+                utility.sphere_collision_check(center_points, 2*self.sphere_radius + self.part_interval)
+            ]
 
-            for pair in tree_pairs:
-                total_collisions += self.check_collision(pair)
+            # NARROW PHASE ALGORITHM
+            # We should know, a-priori, the size of the deep collision pairing array
+            n = len(self.part_points)
+            m = len(deep_pairs)
+            point_pairs = np.empty((m*n**2, 2, 3))
+            # Collect point pairings between objects for bulk processing
+            for i, pair in enumerate(deep_pairs):
+                # Transform the geometry points
+                _, p1 = self.reference_part.apply_transforms(matrix=self.affines[pair[0]])
+                _, p2 = self.reference_part.apply_transforms(matrix=self.affines[pair[1]])
+                # Cython - generate n^2 point pairings
+                point_pairs[i*n**2:(i+1)*n**2, :, :] = uc.collision_point_pairs(p1[:, :3], p2[:, :3])
+            # Calculate collisions
+            deep_collisions = utility.sphere_collision_check(point_pairs, 2*self.leaf_radius + self.part_interval)
+            # Post-process the collision data to have shape (m,)
+            pair_wise_collisions = np.count_nonzero(deep_collisions.reshape((m, n**2)), axis=1)
+            pairs_colliding = np.argwhere(pair_wise_collisions)
 
-        return total_collisions
+            # Add collision data to the intermediary array
+            updates = deep_pairs[pairs_colliding].reshape(len(pairs_colliding),2)
+            for i, j in zip(pairs_colliding, updates):
+                mapped_ind = indices.index(j[0])
+                coll_data[j[1], mapped_ind] = pair_wise_collisions[i]
+
+            # UPDATE COLLISION HISTORY ARRAY
+            for i, ind in enumerate(indices):
+                self.coll_arr[:self.n_parts, ind] = coll_data[:, i]
+
+            # View the collision points (debugging purposes usually)
+            if print_collisions:
+                print('Center points of objects that are colliding:')
+                if np.count_nonzero(pair_wise_collisions) > 0:
+                    colliding = deep_pairs[np.argwhere(pair_wise_collisions)]
+                    for collision in colliding:
+                        print(self.center_points[collision[0][0]],
+                              self.center_points[collision[0][1]])
 
     def total_envelope_collisions(self):
 
@@ -544,38 +563,14 @@ if __name__ == "__main__":
 
     t0 = time.time()
     for i in range(0, n_parts):
-        scene.add_part()
+        scene.add_part(random=(0, 500))
         #print(scene.n_parts, scene.n_pairs)
         #if i > 10:
         #    break
 
-    t1 = time.time()
-    print(t1-t0)
+    scene.part_collisions([1, 5])
 
-    import cProfile
-    from pstats import Stats
 
-    #pr = cProfile.Profile()
-    #pr.enable()
-
-    t2 = time.time()
-
-    #s = len(scene.coll_arr)
-    #scene.coll_arr = np.array([[i for i in range(0,n_parts)] for j in range(0,n_parts)], dtype=float)
-    #scene.coll_arr[np.invert(scene.tri_mask)] = 0
-    #print(scene.coll_arr)
-
-    for i in range(0, n_parts):
-        # if i >= 2:
-        #     break
-        scene.remove_part(0, cy=True)
-        # scene.get_collision_pairs(with_history=False)
-        # print(scene.n_parts, scene.n_pairs)
-
-    print(scene.coll_arr)
-    t3 = time.time()
-
-    print(t3-t2)
 
     #pr.disable()
     #stats = Stats(pr)

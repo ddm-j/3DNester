@@ -111,3 +111,18 @@ def remove_from_collision_array(int index, int n, double[:,:] arr):
         arr[i, n-1] = 0
 
     return np.asarray(arr)
+
+@cython.boundscheck(False)
+@cython.wraparound(False)
+def remove_from_array(int index, int n, double[:] arr):
+
+    cdef int i, j
+
+    # Shift the diagonal matrix
+    for i in range(index, n-1):
+        arr[i] = arr[i+1]
+
+    # Set Column column n-1 to zero
+    arr[n-1] = 0
+
+    return np.asarray(arr)

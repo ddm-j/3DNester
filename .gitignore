@@ -5,3 +5,5 @@ references
 *.html
 *.c
 *.pyd
+*.prof
+*.lprof

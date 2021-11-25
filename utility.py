@@ -199,6 +199,7 @@ def make_rand_vector(dims, d):
     norm = [x/mag for x in vec]
     return np.array([x*d for x in norm]).reshape((dims,))
 
+
 def cartesian(arrays, out=None):
     """
     Generate a cartesian product of input arrays.
