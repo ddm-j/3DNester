@@ -1,7 +1,8 @@
 cimport numpy as np
 import numpy as np
 cimport cython
-from libc.math cimport sqrt
+
+MAX_PARTS = 5000
 
 @cython.boundscheck(False)
 @cython.wraparound(False)
@@ -88,3 +89,25 @@ cpdef remove_pairs(int index, int n, np.ndarray[np.float_t, ndim=2] pairs, np.nd
         hist_view[i] = old_hist_view[i]
 
     return new_pairs, new_hist
+
+
+@cython.boundscheck(False)
+@cython.wraparound(False)
+def remove_from_collision_array(int index, int n, double[:,:] arr):
+
+    cdef int i, j
+
+    # Shift the diagonal matrix
+    for i in range(index, n-1):
+        for j in range(i, n-1):
+                arr[i, j] = arr[i+1, j+1]
+
+    # Shift the rop row
+    for j in range(index, n-1):
+        arr[0, j] = arr[0, j+1]
+
+    # Set Column column n-1 to zero
+    for i in range(n):
+        arr[i, n-1] = 0
+
+    return np.asarray(arr)

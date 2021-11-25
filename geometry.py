@@ -11,6 +11,8 @@ import math
 import time
 from copy import copy, deepcopy
 
+MAX_PARTS = 5000
+
 
 class SphereTree(object):
     # Generates and Octree from a point cloud, then converts it to a sphere tree
@@ -169,7 +171,7 @@ class SphereTree(object):
 
 class Scene(object):
 
-    def __init__(self, reference_part, part_interval=2.5, envelope_interval=0, max_parts = 5000):
+    def __init__(self, reference_part, part_interval=2.5, envelope_interval=0, max_parts=MAX_PARTS):
 
         # Intervals
         self.part_interval = part_interval
@@ -190,7 +192,7 @@ class Scene(object):
         # Collision Pairing & History Array, tracks n^2 collision pairs and history of collision (last update)
         # using a (max parts, max parts) sized array. Create "upper triangular" masking array for selecting
         # ordered collision pair indices from the matrix.
-        self.coll_arr = np.zeros((max_parts, max_parts), dtype=bool)
+        self.coll_arr = np.zeros((max_parts, max_parts), dtype=float)
         self.tri_mask = np.less.outer(np.arange(max_parts), np.arange(max_parts))
 
         # Dictionary
@@ -247,7 +249,7 @@ class Scene(object):
         if debug:
             self.debug()
 
-    def remove_part(self, index, debug=False):
+    def remove_part(self, index, debug=False, cy=False):
 
         # Check if we can remove any more parts
         if self.n_parts == 0:
@@ -264,17 +266,17 @@ class Scene(object):
         self.moves.pop(index)
 
         # Remove part from collision pairs matrix (perform shifting)
-        # Set part row & column to zero
-        self.coll_arr[index, :] = 0
-        self.coll_arr[:, index] = 0
-        # Shift the rows/columns bigger than index "up one row & over (left) one column"
-        self.coll_arr[index:-1, index:-1] = self.coll_arr[index + 1:, index + 1:]
-        # Set last column = 0
-        self.coll_arr[:, -1] = 0
+        # https://stackoverflow.com/questions/70106305/can-this-numpy-operation-perform-as-fast-or-faster-than-its-cython-equivalent/70110327#70110327
+        self.coll_arr = uc.remove_from_collision_array(index, self.n_parts, self.coll_arr)
+
+        # Deprecated code, Cython implementation (above) is about 3500x faster.
+        # self.coll_arr[index:-1, index:-1] = self.coll_arr[index + 1:, index + 1:]
+        # self.coll_arr[0, index:-1] = self.coll_arr[0, index + 1:]
+        # self.coll_arr[:, self.n_parts-1:] = 0
 
         # Update the counters
         self.n_parts -= 1
-        #self.update_n_pairs()
+        self.update_n_pairs()
 
         # Debug if necessary
         if debug:
@@ -538,8 +540,10 @@ if __name__ == "__main__":
     obj1 = SphereTree(file, 10)
     scene = Scene(obj1)
 
+    n_parts = 500
+
     t0 = time.time()
-    for i in range(1, 1000):
+    for i in range(0, n_parts):
         scene.add_part()
         #print(scene.n_parts, scene.n_pairs)
         #if i > 10:
@@ -549,20 +553,30 @@ if __name__ == "__main__":
     print(t1-t0)
 
     import cProfile
+    from pstats import Stats
 
-    pr = cProfile.Profile()
-    pr.enable()
+    #pr = cProfile.Profile()
+    #pr.enable()
 
     t2 = time.time()
-    for i in range(1, 1000):
-        scene.remove_part(0)
-        #scene.get_collision_pairs(with_history=False)
-        #print(scene.n_parts, scene.n_pairs)
-        #if i > 10:
-        #    break
+
+    #s = len(scene.coll_arr)
+    #scene.coll_arr = np.array([[i for i in range(0,n_parts)] for j in range(0,n_parts)], dtype=float)
+    #scene.coll_arr[np.invert(scene.tri_mask)] = 0
+    #print(scene.coll_arr)
+
+    for i in range(0, n_parts):
+        # if i >= 2:
+        #     break
+        scene.remove_part(0, cy=True)
+        # scene.get_collision_pairs(with_history=False)
+        # print(scene.n_parts, scene.n_pairs)
+
+    print(scene.coll_arr)
     t3 = time.time()
 
     print(t3-t2)
 
-    pr.disable()
-    pr.print_stats(sort='time')
+    #pr.disable()
+    #stats = Stats(pr)
+    #stats.sort_stats('tottime').print_stats(30)
