@@ -7,9 +7,23 @@ import warnings
 import cmapy
 import random as rand
 import utility_cy as uc
+#import benchmarking as uc
 import math
 import time
 from copy import copy, deepcopy
+import ctypes as ct
+
+ct.pythonapi.PyCapsule_GetPointer.restype = ct.c_void_p
+ct.pythonapi.PyCapsule_GetPointer.argtypes = [ct.py_object, ct.c_char_p]
+ct.pythonapi.PyCapsule_GetName.restype = ct.c_char_p
+ct.pythonapi.PyCapsule_GetName.argtypes = [ct.py_object]
+ptr_type = ct.CFUNCTYPE(ct.c_void_p, ct.c_char_p, ct.c_char_p,
+                        ct.POINTER(ct.c_int), ct.POINTER(ct.c_int),
+                        ct.POINTER(ct.c_int), ct.POINTER(ct.c_double),
+                        ct.POINTER(ct.c_double), ct.POINTER(ct.c_int),
+                        ct.POINTER(ct.c_double), ct.POINTER(ct.c_int),
+                        ct.POINTER(ct.c_double), ct.POINTER(ct.c_double),
+                        ct.POINTER(ct.c_int))
 
 MAX_PARTS = 5000
 
@@ -321,7 +335,7 @@ class Scene(object):
 
         self.build_envelope = envelope
 
-    @profile
+    #@profile
     def part_collisions(self, indices, print_collisions=False):
         if len(self.parts) > 1:
 
@@ -357,6 +371,8 @@ class Scene(object):
             pair_wise_collisions = np.count_nonzero(deep_collisions.reshape((m, n**2)), axis=1)
             pairs_colliding = np.argwhere(pair_wise_collisions)
 
+            print(sum(pair_wise_collisions))
+
             # Add collision data to the intermediary array
             updates = deep_pairs[pairs_colliding].reshape(len(pairs_colliding),2)
             for i, j in zip(pairs_colliding, updates):
@@ -375,6 +391,30 @@ class Scene(object):
                     for collision in colliding:
                         print(self.center_points[collision[0][0]],
                               self.center_points[collision[0][1]])
+
+    def part_collisionsV2(self, indices):
+
+        pairs = [sorted([ind, j]) for ind in indices for j in range(self.n_parts) if ind != j]
+        inds = np.array(indices, dtype=int)
+        pairs = np.array(pairs, dtype=int)
+        points = np.array(self.center_points, dtype=float, order='F')
+        affines = np.concatenate(self.affines, axis=1)
+        affines = np.array(affines, order='F')
+        part_points = np.array(self.part_points).T
+
+        output_array, total = uc.part_collisions(pairs,
+                           inds,
+                           points,
+                           affines,
+                           part_points,
+                           self.coll_arr,
+                           self.sphere_radius,
+                           self.leaf_radius,
+                           self.part_interval)
+
+        # Switch back to C contiguity
+        self.coll_arr = np.ascontiguousarray(output_array)
+        print(total)
 
     def total_envelope_collisions(self):
 
@@ -563,13 +603,21 @@ if __name__ == "__main__":
 
     t0 = time.time()
     for i in range(0, n_parts):
-        scene.add_part(random=(0, 500))
+        scene.add_part(random=(0, 100))
         #print(scene.n_parts, scene.n_pairs)
         #if i > 10:
         #    break
 
-    scene.part_collisions([1, 5])
+    cy = True
+    t0 = time.time()
+    if cy:
+        scene.part_collisionsV2([1, 5])
+    t1 = time.time()
+    print(t1-t0)
 
+    scene.part_collisions([1, 5])
+    t2 = time.time()
+    print(t2-t1)
 
 
     #pr.disable()

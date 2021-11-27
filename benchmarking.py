@@ -1,5 +1,6 @@
 # importing the required module
 import timeit
+import example
 
 # code snippet to be executed only once
 mysetup_1 = "import numpy as np\n" \
